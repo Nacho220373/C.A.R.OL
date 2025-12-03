@@ -71,7 +71,7 @@ class SharePointRequestsReader:
 
         return clean_item
 
-    def fetch_active_requests(self, limit_dates=5):
+    def fetch_active_requests(self, limit_dates=5, include_unread_scan=True):
         """Recorre la estructura para obtener solicitudes y cuenta correos no leídos."""
         all_requests = []
         print("🔄 Iniciando escaneo de solicitudes...")
@@ -103,20 +103,18 @@ class SharePointRequestsReader:
                     clean_req['location_code'] = loc_folder['name']
                     clean_req['date_folder'] = date_folder['name']
                     
-                    # --- ANÁLISIS DE CONTENIDO INTERNO (NUEVO) ---
-                    # Obtenemos los archivos ahora para contar los no leídos
-                    # Esto hace la carga inicial un poco más lenta, pero necesaria para los badges
-                    files = self.get_request_files(clean_req['id'])
-                    unread_count = 0
-                    for f in files:
-                        fname = f.get('name', '').lower()
-                        status = f.get('status', '')
-                        # Contamos si es email Y si el status es "To Be Reviewed"
-                        if (fname.endswith('.eml') or fname.endswith('.msg')) and status == "To Be Reviewed":
-                            unread_count += 1
-                    
-                    clean_req['unread_emails'] = unread_count
-                    # ---------------------------------------------
+                    if include_unread_scan:
+                        # --- ANÁLISIS DE CONTENIDO INTERNO ---
+                        files = self.get_request_files(clean_req['id'])
+                        unread_count = 0
+                        for f in files:
+                            fname = f.get('name', '').lower()
+                            status = f.get('status', '')
+                            if (fname.endswith('.eml') or fname.endswith('.msg')) and status == "To Be Reviewed":
+                                unread_count += 1
+                        clean_req['unread_emails'] = unread_count
+                    else:
+                        clean_req['unread_emails'] = 0
                     
                     all_requests.append(clean_req)
 

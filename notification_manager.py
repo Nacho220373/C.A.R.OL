@@ -1,6 +1,5 @@
 import threading
 import flet as ft
-from plyer import notification
 
 class NotificationManager:
     """
@@ -9,6 +8,8 @@ class NotificationManager:
     """
     def __init__(self, page: ft.Page):
         self.page = page
+        self._os_notifier = None
+        self._notifier_lock = threading.Lock()
 
     def send(self, title: str, message: str, type: str = "info"):
         """
@@ -25,8 +26,12 @@ class NotificationManager:
         self._show_in_app_snackbar(title, message, type)
 
     def _send_os_notification(self, title, message):
+        notifier = self._ensure_os_notifier()
+        if not notifier:
+            return
+
         try:
-            notification.notify(
+            notifier.notify(
                 title=title,
                 message=message,
                 app_name="C.A.R.O.L",
@@ -35,6 +40,22 @@ class NotificationManager:
             )
         except Exception as e:
             print(f"⚠️ Error enviando notificación de escritorio: {e}")
+
+    def _ensure_os_notifier(self):
+        with self._notifier_lock:
+            if self._os_notifier is False:
+                return None
+            if self._os_notifier:
+                return self._os_notifier
+
+            try:
+                from plyer import notification as notifier_module
+                self._os_notifier = notifier_module
+                return self._os_notifier
+            except Exception as e:
+                print(f"⚠️ Plyer no disponible ({e}). Se omitirá la notificación del sistema.")
+                self._os_notifier = False
+                return None
 
     def _show_in_app_snackbar(self, title, message, type):
         # Definir colores según el tipo

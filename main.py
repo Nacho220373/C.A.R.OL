@@ -4,8 +4,7 @@ import threading
 import time
 import os
 from datetime import datetime, timezone
-from sharepoint_requests_reader import SharePointRequestsReader
-from deadline_calculator import DeadlineCalculator
+from request_service import RequestService
 from notification_manager import NotificationManager
 
 # --- SSA MARINE STYLE GUIDE ---
@@ -110,9 +109,9 @@ def main(page: ft.Page):
     page.window_icon = "assets/Icono.png"
     
     # --- INYECCIÓN DE DEPENDENCIAS ---
-    reader = SharePointRequestsReader()
-    calculator = DeadlineCalculator()
+    request_service = RequestService()
     notifier = NotificationManager(page)
+    calculator = request_service.calculator
     
     # --- STATE REFERENCES ---
     ui_refs = {} 
@@ -217,8 +216,7 @@ def main(page: ft.Page):
 
         # 4. Sincronización en segundo plano con Rollback
         def sync_task():
-            # Llamamos al reader para que escriba en SharePoint
-            success = reader.update_request_metadata(req_data['id'], new_status, new_priority)
+            success = request_service.update_request_metadata(req_data['id'], new_status, new_priority)
             
             if success:
                 # Éxito confirmado
@@ -267,10 +265,10 @@ def main(page: ft.Page):
                 file_data['status'] = 'Seen' 
                 
                 # Actualizar status de archivo en segundo plano
-                threading.Thread(target=lambda: reader.update_request_metadata(file_data['id'], new_status="Seen"), daemon=True).start()
+                threading.Thread(target=lambda: request_service.update_request_metadata(file_data['id'], new_status="Seen"), daemon=True).start()
 
             def download_and_open():
-                local_path = reader.download_file_locally(download_url, filename)
+                local_path = request_service.download_file(download_url, filename)
                 page.close(mail_loading_dialog)
                 if local_path:
                     try:
@@ -303,7 +301,7 @@ def main(page: ft.Page):
         def fetch_files_background():
             try:
                 time.sleep(0.5) 
-                files = reader.get_request_files(req_data['id'])
+                files = request_service.get_request_files(req_data['id'], force_refresh=True)
                 
                 file_controls = []
                 if not files:
@@ -475,9 +473,7 @@ def main(page: ft.Page):
         while True:
             time.sleep(60) 
             try:
-                # 1. Obtener estado actual
-                new_requests = reader.fetch_active_requests(limit_dates=1)
-                new_processed = calculator.process_requests(new_requests)
+                new_processed = request_service.load_requests(limit_dates=1)
                 
                 for req in new_processed:
                     req_id = req['id']
@@ -578,13 +574,12 @@ def main(page: ft.Page):
             status_text.value = "Connecting to Microsoft... \nPlease check your browser window."
             page.update()
             
-            _ = reader._get_drive_id() 
+            request_service.ensure_drive_ready()
             
             progress_thread = threading.Thread(target=cycle_messages, daemon=True)
             progress_thread.start()
             
-            raw_requests = reader.fetch_active_requests(limit_dates=1)
-            processed_requests = calculator.process_requests(raw_requests)
+            processed_requests = request_service.load_requests(limit_dates=1, force_unread_refresh=True)
             
             stop_loading_event.set()
             status_text.value = "Rendering..."
