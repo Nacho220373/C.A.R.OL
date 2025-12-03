@@ -201,8 +201,8 @@ class SharePointRequestsReader:
             print(f"Excepción al descargar: {e}")
             return None
 
-    def update_request_metadata(self, item_id, new_status=None, new_priority=None):
-        """Actualiza Status o Priority de un item (Carpeta o Archivo)."""
+    def update_request_metadata(self, item_id, new_status=None, new_priority=None, new_category=None):
+        """Actualiza Status, Priority o Category de un item (Carpeta o Archivo)."""
         drive_id = self._get_drive_id()
         if not drive_id or not item_id: return False
 
@@ -214,6 +214,8 @@ class SharePointRequestsReader:
             payload[COLUMN_MAP['status']] = new_status
         if new_priority:
             payload[COLUMN_MAP['priority']] = new_priority
+        if new_category:
+            payload[COLUMN_MAP['category']] = new_category
             
         if not payload: return False
 
