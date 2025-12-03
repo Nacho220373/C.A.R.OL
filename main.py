@@ -122,6 +122,14 @@ def main(page: ft.Page):
     requests_state_cache = {}
     requests_meta_cache = {}
     requests_refresh_tracker = {}
+    requests_store = {}
+
+    def rebuild_views_from_store():
+        """Re-render tabs using the locally cached requests."""
+        if not requests_store:
+            return
+        dataset = data_service.build_from_records(list(requests_store.values()))
+        render_dataset(dataset)
 
     # --- UI COMPONENTS ---
 
@@ -145,11 +153,24 @@ def main(page: ft.Page):
     
     status_dropdown = ft.Dropdown(
         label="Status", width=200, text_size=13, content_padding=10,
-        options=[ft.dropdown.Option("Pending"), ft.dropdown.Option("In Progress"), ft.dropdown.Option("Done"), ft.dropdown.Option("Hold")]
+        options=[
+            ft.dropdown.Option("Pending"),
+            ft.dropdown.Option("In Progress"),
+            ft.dropdown.Option("Done"),
+            ft.dropdown.Option("Hold"),
+            ft.dropdown.Option("No Action Needed"),
+        ]
     )
     priority_dropdown = ft.Dropdown(
         label="Priority", width=150, text_size=13, content_padding=10,
         options=[ft.dropdown.Option("1"), ft.dropdown.Option("2"), ft.dropdown.Option("3"), ft.dropdown.Option("4")]
+    )
+    category_dropdown = ft.Dropdown(
+        label="Category",
+        width=220,
+        text_size=13,
+        content_padding=10,
+        options=[ft.dropdown.Option(cat) for cat in data_service.categories],
     )
 
     def close_detail_dialog(e):
@@ -159,7 +180,8 @@ def main(page: ft.Page):
         title=ft.Column([
             detail_title, detail_subtitle, ft.Divider(),
             ft.Text("Edit Properties:", size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.GREY),
-            ft.Row([status_dropdown, priority_dropdown], alignment=ft.MainAxisAlignment.START)
+            ft.Row([status_dropdown, priority_dropdown], alignment=ft.MainAxisAlignment.START, wrap=True),
+            category_dropdown,
         ], spacing=5),
         content=ft.Container(content=detail_files_list, width=600, bgcolor=ft.Colors.WHITE, border_radius=8),
         actions=[ft.TextButton("Close", on_click=close_detail_dialog, style=ft.ButtonStyle(color=SSA_GREEN))],
@@ -207,22 +229,29 @@ def main(page: ft.Page):
         # 1. Guardar valores anteriores por si falla
         old_status = req_data.get('status')
         old_priority = str(req_data.get('priority'))
+        old_category = req_data.get('category') or "Others"
         
         # 2. Obtener nuevos valores
         new_status = status_dropdown.value
         new_priority = priority_dropdown.value
+        new_category = category_dropdown.value or old_category
         
         # 3. Actualización Optimista (UI Inmediata)
         req_data['status'] = new_status
         req_data['priority'] = new_priority
+        req_data['category'] = new_category
         update_local_ui_card(req_data['id'], new_status, new_priority)
+        requests_store[req_data['id']] = req_data
+        rebuild_views_from_store()
         
         notifier.send("Saving...", "Syncing with SharePoint...", "info")
 
         # 4. Sincronización en segundo plano con Rollback
         def sync_task():
             # Llamamos al reader para que escriba en SharePoint
-            success = reader.update_request_metadata(req_data['id'], new_status, new_priority)
+            success = reader.update_request_metadata(
+                req_data['id'], new_status, new_priority, new_category
+            )
             
             if success:
                 # Éxito confirmado
@@ -232,14 +261,18 @@ def main(page: ft.Page):
                 print(f"❌ Error actualizando {req_data['id']}. Revirtiendo...")
                 req_data['status'] = old_status
                 req_data['priority'] = old_priority
+                req_data['category'] = old_category
                 
                 # Restaurar UI
                 update_local_ui_card(req_data['id'], old_status, old_priority)
+                requests_store[req_data['id']] = req_data
+                rebuild_views_from_store()
                 
                 # Restaurar controles del diálogo si sigue abierto
                 if detail_dialog.open:
                     status_dropdown.value = old_status
                     priority_dropdown.value = old_priority
+                    category_dropdown.value = old_category
                     page.update()
                 
                 notifier.send("Error", "Failed to update SharePoint. Changes reverted.", "error")
@@ -296,10 +329,12 @@ def main(page: ft.Page):
         detail_subtitle.value = f"Location: {req_data.get('location_code')}"
         status_dropdown.value = req_data.get('status')
         priority_dropdown.value = str(req_data.get('priority'))
+        category_dropdown.value = req_data.get('category') or "Others"
         
         # Asignar handlers
         status_dropdown.on_change = lambda e: handle_property_change(e, req_data)
         priority_dropdown.on_change = lambda e: handle_property_change(e, req_data)
+        category_dropdown.on_change = lambda e: handle_property_change(e, req_data)
 
         detail_files_list.controls = [ft.ProgressRing(color=SSA_GREEN)]
         page.open(detail_dialog)
@@ -507,6 +542,7 @@ def main(page: ft.Page):
                     requests_meta_cache[req_id] = last_modified
 
                     req['unread_emails'] = new_unread
+                    requests_store[req_id] = req
                     
                     if req_id in ui_refs:
                         # --- CASO 1: ACTUALIZACIÓN ---
@@ -530,6 +566,7 @@ def main(page: ft.Page):
                             )
 
                         requests_refresh_tracker[req_id] = time.time()
+                        requests_store[req_id] = req
                         
                         cat = req.get('category', 'Others')
                         target_category = "Others"
@@ -562,6 +599,10 @@ def main(page: ft.Page):
         ui_refs.clear()
         grids.clear()
         tabs.tabs.clear()
+
+        requests_store.clear()
+        for req in dataset.processed_requests:
+            requests_store[req['id']] = req
 
         requests_state_cache.clear()
         requests_state_cache.update(dataset.state_cache)

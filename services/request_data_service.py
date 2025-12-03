@@ -49,7 +49,14 @@ class RequestDataService:
             include_unread=include_unread,
         )
         processed_requests = self.calculator.process_requests(raw_requests)
+        return self.build_from_records(processed_requests)
 
+    def build_from_records(self, processed_requests: List[dict]) -> RequestDataset:
+        """Builds the dataset structure from already processed records."""
+        processed_copy = list(processed_requests)
+        return self._build_dataset(processed_copy)
+
+    def _build_dataset(self, processed_requests: List[dict]) -> RequestDataset:
         state_cache = {req["id"]: req.get("unread_emails", 0) for req in processed_requests}
         meta_cache = {req["id"]: req.get("modified_at") for req in processed_requests}
 
