@@ -1,29 +1,19 @@
 import os
 import tempfile
-import threading
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
 import requests
+from datetime import datetime
 from dotenv import load_dotenv
-
 from ms_graph_client import MSGraphClient
 from sharepoint_config import COLUMN_MAP
 
 load_dotenv()
 
 class SharePointRequestsReader:
-    def __init__(self, *, max_workers: int = 6, file_cache_ttl: int = 180):
+    def __init__(self):
         self.client = MSGraphClient()
         self.site_id = os.getenv('SHAREPOINT_SITE_ID')
         self.root_path = os.getenv('TARGET_FOLDER_PATH')
         self.drive_id = None
-        self.max_workers = max_workers
-
-        # In-memory cache for per-request files to reduce repeated round-trips.
-        self._file_cache: dict[str, tuple[float, list[dict]]] = {}
-        self._cache_lock = threading.Lock()
-        self._file_cache_ttl = max(file_cache_ttl, 10)
 
     def _get_drive_id(self):
         """Obtiene el ID del drive (cacheado en memoria de la instancia)."""
@@ -81,8 +71,8 @@ class SharePointRequestsReader:
 
         return clean_item
 
-    def fetch_active_requests(self, limit_dates=5, *, include_unread: bool = True):
-        """Recorre la estructura para obtener solicitudes y (opcional) cuenta correos no leídos."""
+    def fetch_active_requests(self, limit_dates=5):
+        """Recorre la estructura para obtener solicitudes y cuenta correos no leídos."""
         all_requests = []
         print("🔄 Iniciando escaneo de solicitudes...")
 
@@ -113,39 +103,28 @@ class SharePointRequestsReader:
                     clean_req['location_code'] = loc_folder['name']
                     clean_req['date_folder'] = date_folder['name']
                     
+                    # --- ANÁLISIS DE CONTENIDO INTERNO (NUEVO) ---
+                    # Obtenemos los archivos ahora para contar los no leídos
+                    # Esto hace la carga inicial un poco más lenta, pero necesaria para los badges
+                    files = self.get_request_files(clean_req['id'])
+                    unread_count = 0
+                    for f in files:
+                        fname = f.get('name', '').lower()
+                        status = f.get('status', '')
+                        # Contamos si es email Y si el status es "To Be Reviewed"
+                        if (fname.endswith('.eml') or fname.endswith('.msg')) and status == "To Be Reviewed":
+                            unread_count += 1
+                    
+                    clean_req['unread_emails'] = unread_count
+                    # ---------------------------------------------
+                    
                     all_requests.append(clean_req)
-
-        if include_unread and all_requests:
-            self._hydrate_unread_counts(all_requests)
-        else:
-            for req in all_requests:
-                req['unread_emails'] = 0
 
         print(f"✅ Escaneo completado. {len(all_requests)} solicitudes encontradas.")
         return all_requests
 
-    def _hydrate_unread_counts(self, requests_batch: list[dict]):
-        """Populates unread_emails on each request using a worker pool."""
-        def task(req_id: str):
-            return self.get_unread_email_count(req_id, force_refresh=True)
-
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_map = {executor.submit(task, req['id']): req for req in requests_batch}
-            for future in as_completed(future_map):
-                req = future_map[future]
-                try:
-                    req['unread_emails'] = future.result()
-                except Exception as exc:
-                    print(f"⚠️ Error calculando correos no leídos para {req['id']}: {exc}")
-                    req['unread_emails'] = 0
-
-    def get_request_files(self, request_id, *, use_cache: bool = True):
+    def get_request_files(self, request_id):
         """Obtiene archivos dentro de una solicitud, ordenados por fecha."""
-        if use_cache:
-            cached = self._get_cached_files(request_id)
-            if cached is not None:
-                return cached
-
         raw_files = self._get_items(item_id=request_id)
         clean_files = []
 
@@ -154,36 +133,7 @@ class SharePointRequestsReader:
                 clean_files.append(self._map_fields(f))
 
         clean_files.sort(key=lambda x: x.get('created_at', ''))
-
-        if use_cache:
-            self._set_cached_files(request_id, clean_files)
         return clean_files
-
-    def get_unread_email_count(self, request_id: str, *, force_refresh: bool = False) -> int:
-        """Returns unread email count, leveraging the cached file metadata."""
-        files = self.get_request_files(request_id, use_cache=not force_refresh)
-        unread_count = 0
-        for f in files:
-            fname = f.get('name', '').lower()
-            status = f.get('status', '')
-            if (fname.endswith('.eml') or fname.endswith('.msg')) and status == "To Be Reviewed":
-                unread_count += 1
-        return unread_count
-
-    def _get_cached_files(self, request_id: str):
-        with self._cache_lock:
-            cached = self._file_cache.get(request_id)
-            if not cached:
-                return None
-            ts, files = cached
-            if time.time() - ts > self._file_cache_ttl:
-                self._file_cache.pop(request_id, None)
-                return None
-            return files
-
-    def _set_cached_files(self, request_id: str, files: list[dict]):
-        with self._cache_lock:
-            self._file_cache[request_id] = (time.time(), files)
 
     def download_file_locally(self, download_url, filename):
         """Descarga archivo temporalmente."""
@@ -201,8 +151,8 @@ class SharePointRequestsReader:
             print(f"Excepción al descargar: {e}")
             return None
 
-    def update_request_metadata(self, item_id, new_status=None, new_priority=None, new_category=None):
-        """Actualiza Status, Priority o Category de un item (Carpeta o Archivo)."""
+    def update_request_metadata(self, item_id, new_status=None, new_priority=None):
+        """Actualiza Status o Priority de un item (Carpeta o Archivo)."""
         drive_id = self._get_drive_id()
         if not drive_id or not item_id: return False
 
@@ -214,8 +164,6 @@ class SharePointRequestsReader:
             payload[COLUMN_MAP['status']] = new_status
         if new_priority:
             payload[COLUMN_MAP['priority']] = new_priority
-        if new_category:
-            payload[COLUMN_MAP['category']] = new_category
             
         if not payload: return False
 

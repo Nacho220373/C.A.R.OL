@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from sharepoint_requests_reader import SharePointRequestsReader
 from deadline_calculator import DeadlineCalculator
 from notification_manager import NotificationManager
-from services.request_data_service import RequestDataService
 
 # --- SSA MARINE STYLE GUIDE ---
 SSA_GREEN = "#84BD00"
@@ -114,22 +113,11 @@ def main(page: ft.Page):
     reader = SharePointRequestsReader()
     calculator = DeadlineCalculator()
     notifier = NotificationManager(page)
-    data_service = RequestDataService(reader, calculator)
     
     # --- STATE REFERENCES ---
     ui_refs = {} 
     grids = {}
     requests_state_cache = {}
-    requests_meta_cache = {}
-    requests_refresh_tracker = {}
-    requests_store = {}
-
-    def rebuild_views_from_store():
-        """Re-render tabs using the locally cached requests."""
-        if not requests_store:
-            return
-        dataset = data_service.build_from_records(list(requests_store.values()))
-        render_dataset(dataset)
 
     # --- UI COMPONENTS ---
 
@@ -153,24 +141,11 @@ def main(page: ft.Page):
     
     status_dropdown = ft.Dropdown(
         label="Status", width=200, text_size=13, content_padding=10,
-        options=[
-            ft.dropdown.Option("Pending"),
-            ft.dropdown.Option("In Progress"),
-            ft.dropdown.Option("Done"),
-            ft.dropdown.Option("Hold"),
-            ft.dropdown.Option("No Action Needed"),
-        ]
+        options=[ft.dropdown.Option("Pending"), ft.dropdown.Option("In Progress"), ft.dropdown.Option("Done"), ft.dropdown.Option("Hold")]
     )
     priority_dropdown = ft.Dropdown(
         label="Priority", width=150, text_size=13, content_padding=10,
         options=[ft.dropdown.Option("1"), ft.dropdown.Option("2"), ft.dropdown.Option("3"), ft.dropdown.Option("4")]
-    )
-    category_dropdown = ft.Dropdown(
-        label="Category",
-        width=220,
-        text_size=13,
-        content_padding=10,
-        options=[ft.dropdown.Option(cat) for cat in data_service.categories],
     )
 
     def close_detail_dialog(e):
@@ -180,8 +155,7 @@ def main(page: ft.Page):
         title=ft.Column([
             detail_title, detail_subtitle, ft.Divider(),
             ft.Text("Edit Properties:", size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.GREY),
-            ft.Row([status_dropdown, priority_dropdown], alignment=ft.MainAxisAlignment.START, wrap=True),
-            category_dropdown,
+            ft.Row([status_dropdown, priority_dropdown], alignment=ft.MainAxisAlignment.START)
         ], spacing=5),
         content=ft.Container(content=detail_files_list, width=600, bgcolor=ft.Colors.WHITE, border_radius=8),
         actions=[ft.TextButton("Close", on_click=close_detail_dialog, style=ft.ButtonStyle(color=SSA_GREEN))],
@@ -229,29 +203,22 @@ def main(page: ft.Page):
         # 1. Guardar valores anteriores por si falla
         old_status = req_data.get('status')
         old_priority = str(req_data.get('priority'))
-        old_category = req_data.get('category') or "Others"
         
         # 2. Obtener nuevos valores
         new_status = status_dropdown.value
         new_priority = priority_dropdown.value
-        new_category = category_dropdown.value or old_category
         
         # 3. Actualización Optimista (UI Inmediata)
         req_data['status'] = new_status
         req_data['priority'] = new_priority
-        req_data['category'] = new_category
         update_local_ui_card(req_data['id'], new_status, new_priority)
-        requests_store[req_data['id']] = req_data
-        rebuild_views_from_store()
         
         notifier.send("Saving...", "Syncing with SharePoint...", "info")
 
         # 4. Sincronización en segundo plano con Rollback
         def sync_task():
             # Llamamos al reader para que escriba en SharePoint
-            success = reader.update_request_metadata(
-                req_data['id'], new_status, new_priority, new_category
-            )
+            success = reader.update_request_metadata(req_data['id'], new_status, new_priority)
             
             if success:
                 # Éxito confirmado
@@ -261,18 +228,14 @@ def main(page: ft.Page):
                 print(f"❌ Error actualizando {req_data['id']}. Revirtiendo...")
                 req_data['status'] = old_status
                 req_data['priority'] = old_priority
-                req_data['category'] = old_category
                 
                 # Restaurar UI
                 update_local_ui_card(req_data['id'], old_status, old_priority)
-                requests_store[req_data['id']] = req_data
-                rebuild_views_from_store()
                 
                 # Restaurar controles del diálogo si sigue abierto
                 if detail_dialog.open:
                     status_dropdown.value = old_status
                     priority_dropdown.value = old_priority
-                    category_dropdown.value = old_category
                     page.update()
                 
                 notifier.send("Error", "Failed to update SharePoint. Changes reverted.", "error")
@@ -329,12 +292,10 @@ def main(page: ft.Page):
         detail_subtitle.value = f"Location: {req_data.get('location_code')}"
         status_dropdown.value = req_data.get('status')
         priority_dropdown.value = str(req_data.get('priority'))
-        category_dropdown.value = req_data.get('category') or "Others"
         
         # Asignar handlers
         status_dropdown.on_change = lambda e: handle_property_change(e, req_data)
         priority_dropdown.on_change = lambda e: handle_property_change(e, req_data)
-        category_dropdown.on_change = lambda e: handle_property_change(e, req_data)
 
         detail_files_list.controls = [ft.ProgressRing(color=SSA_GREEN)]
         page.open(detail_dialog)
@@ -511,41 +472,22 @@ def main(page: ft.Page):
         """
         Monitorea cambios en SharePoint y notifica al usuario.
         """
-        REFRESH_INTERVAL = 300  # seconds
         while True:
             time.sleep(60) 
             try:
-                # 1. Obtener estado actual (metadatos ligeros, sin adjuntos)
-                new_requests = reader.fetch_active_requests(limit_dates=1, include_unread=False)
+                # 1. Obtener estado actual
+                new_requests = reader.fetch_active_requests(limit_dates=1)
                 new_processed = calculator.process_requests(new_requests)
                 
                 for req in new_processed:
                     req_id = req['id']
                     req_name = req.get('request_name', 'Unknown')
-                    last_modified = req.get('modified_at')
-                    old_unread = requests_state_cache.get(req_id, 0)
-                    need_refresh = req_id not in requests_state_cache
-                    if not need_refresh:
-                        cached_modified = requests_meta_cache.get(req_id)
-                        need_refresh = last_modified and cached_modified != last_modified
-                        if not need_refresh:
-                            last_refresh = requests_refresh_tracker.get(req_id, 0)
-                            need_refresh = (time.time() - last_refresh) > REFRESH_INTERVAL
-
-                    if need_refresh:
-                        new_unread = reader.get_unread_email_count(req_id, force_refresh=True)
-                        requests_refresh_tracker[req_id] = time.time()
-                    else:
-                        new_unread = old_unread
-
-                    requests_state_cache[req_id] = new_unread
-                    requests_meta_cache[req_id] = last_modified
-
-                    req['unread_emails'] = new_unread
-                    requests_store[req_id] = req
+                    new_unread = req.get('unread_emails', 0)
                     
                     if req_id in ui_refs:
                         # --- CASO 1: ACTUALIZACIÓN ---
+                        old_unread = requests_state_cache.get(req_id, 0)
+                        
                         if new_unread > old_unread:
                             notifier.send(
                                 title="New Reply Received",
@@ -553,6 +495,7 @@ def main(page: ft.Page):
                                 type="info"
                             )
                         
+                        requests_state_cache[req_id] = new_unread
                         update_local_badge(req_id, new_unread)
                         update_local_ui_card(req_id, req.get('status'), req.get('priority'))
                     
@@ -565,8 +508,7 @@ def main(page: ft.Page):
                                 type="success"
                             )
 
-                        requests_refresh_tracker[req_id] = time.time()
-                        requests_store[req_id] = req
+                        requests_state_cache[req_id] = new_unread 
                         
                         cat = req.get('category', 'Others')
                         target_category = "Others"
@@ -594,76 +536,20 @@ def main(page: ft.Page):
     poll_thread = threading.Thread(target=background_poller, daemon=True)
     poll_thread.start()
 
-    def render_dataset(dataset):
-        """Rebuilds tabs and local caches from a RequestDataset."""
-        ui_refs.clear()
-        grids.clear()
-        tabs.tabs.clear()
-
-        requests_store.clear()
-        for req in dataset.processed_requests:
-            requests_store[req['id']] = req
-
-        requests_state_cache.clear()
-        requests_state_cache.update(dataset.state_cache)
-
-        requests_meta_cache.clear()
-        requests_meta_cache.update(dataset.meta_cache)
-
-        requests_refresh_tracker.clear()
-        now_ts = time.time()
-        for req_id in dataset.state_cache.keys():
-            requests_refresh_tracker[req_id] = now_ts
-
-        grid_config = {
-            "expand": 1,
-            "runs_count": 4,
-            "max_extent": 320,
-            "child_aspect_ratio": 0.95,
-            "spacing": 20,
-            "run_spacing": 20,
-        }
-
-        grid_todo = ft.GridView(**grid_config)
-        for item in dataset.todo_requests:
-            grid_todo.controls.append(create_request_card(item, show_category_label=True))
-        grids["To Do"] = grid_todo
-
-        tabs.tabs.append(
-            ft.Tab(
-                text=f"To Do ({len(dataset.todo_requests)})",
-                icon=ft.Icons.CHECKLIST_RTL,
-                content=ft.Container(content=grid_todo, padding=20),
-            )
-        )
-
-        for cat_name, items in dataset.grouped_requests.items():
-            if not items:
-                continue
-            grid = ft.GridView(**grid_config)
-            for item in items:
-                grid.controls.append(create_request_card(item))
-            grids[cat_name] = grid
-
-            tabs.tabs.append(
-                ft.Tab(
-                    text=f"{cat_name} ({len(items)})",
-                    content=ft.Container(content=grid, padding=20),
-                )
-            )
-
-        page.update()
-
-    def load_data(limit_dates: int = 1):
+    def load_data():
         loading_container.visible = True
         status_text.value = "Initializing..."
+        
         tabs.visible = False
+        ui_refs.clear() 
+        grids.clear() 
+        requests_state_cache.clear()
         page.update()
 
         stop_loading_event = threading.Event()
 
         def cycle_messages():
-            time.sleep(0.5)
+            time.sleep(0.5) 
             status_text.value = "Scanning emails for this payroll period..."
             page.update()
             time.sleep(10)
@@ -673,47 +559,94 @@ def main(page: ft.Page):
                 "Let Carol work...",
                 "Just a moment, organizing the chaos...",
                 "Reviewing the Matrix...",
-                "Leave me alone...",
+                "Leave me alone...",  
                 "Almost there...",
                 "Asking the server nicely...",
                 "Deciphering payroll hieroglyphs...",
                 "Beep boop... calculating deadlines...",
                 "This is taking longer than my coffee break...",
             ]
-
+            
             idx = 0
             while not stop_loading_event.is_set():
-                status_text.value = messages[idx % len(messages)]
+                status_text.value = messages[idx % len(messages)] 
                 page.update()
                 idx += 1
                 time.sleep(10)
 
-        def worker():
-            try:
-                status_text.value = "Connecting to Microsoft... \nPlease check your browser window."
-                page.update()
+        try:
+            status_text.value = "Connecting to Microsoft... \nPlease check your browser window."
+            page.update()
+            
+            _ = reader._get_drive_id() 
+            
+            progress_thread = threading.Thread(target=cycle_messages, daemon=True)
+            progress_thread.start()
+            
+            raw_requests = reader.fetch_active_requests(limit_dates=1)
+            processed_requests = calculator.process_requests(raw_requests)
+            
+            stop_loading_event.set()
+            status_text.value = "Rendering..."
+            page.update()
+            
+            todo_list = []
+            grouped_requests = {
+                "Request": [], "Staff Movement": [], "Inquiry": [], "Information": [], "Others": []
+            }
+            
+            for r in processed_requests:
+                requests_state_cache[r['id']] = r.get('unread_emails', 0)
 
-                _ = reader._get_drive_id()
+                status_val = str(r.get('status', '')).lower()
+                if "pending" in status_val or "progress" in status_val:
+                    todo_list.append(r)
 
-                threading.Thread(target=cycle_messages, daemon=True).start()
+                cat = r.get('category', 'Others')
+                found = False
+                for key in ["Request", "Staff Movement", "Inquiry", "Information"]:
+                    if key.lower() in str(cat).lower():
+                        grouped_requests[key].append(r)
+                        found = True
+                        break
+                if not found: grouped_requests["Others"].append(r)
+            
+            tabs.tabs.clear()
+            
+            grid_config = {"expand": 1, "runs_count": 4, "max_extent": 320, "child_aspect_ratio": 0.95, "spacing": 20, "run_spacing": 20}
 
-                dataset = data_service.load(limit_dates=limit_dates, include_unread=True)
+            grid_todo = ft.GridView(**grid_config)
+            if todo_list:
+                for item in todo_list:
+                    grid_todo.controls.append(create_request_card(item, show_category_label=True))
+            grids["To Do"] = grid_todo 
+            
+            tabs.tabs.append(ft.Tab(
+                text=f"To Do ({len(todo_list)})", 
+                icon=ft.Icons.CHECKLIST_RTL, 
+                content=ft.Container(content=grid_todo, padding=20)
+            ))
+            
+            for cat_name, items in grouped_requests.items():
+                if items:
+                    grid = ft.GridView(**grid_config)
+                    for item in items:
+                        grid.controls.append(create_request_card(item))
+                    grids[cat_name] = grid 
+                    
+                    tabs.tabs.append(ft.Tab(
+                        text=f"{cat_name} ({len(items)})", 
+                        content=ft.Container(content=grid, padding=20)
+                    ))
 
-                stop_loading_event.set()
-                status_text.value = "Rendering..."
-                page.update()
-
-                render_dataset(dataset)
-            except Exception as e:
-                stop_loading_event.set()
-                notifier.send("Error", f"Could not load data: {e}", "error")
-                print(e)
-            finally:
-                loading_container.visible = False
-                tabs.visible = True
-                page.update()
-
-        threading.Thread(target=worker, daemon=True).start()
+        except Exception as e:
+            notifier.send("Error", f"Could not load data: {e}", "error")
+            print(e)
+        finally:
+            stop_loading_event.set()
+            loading_container.visible = False
+            tabs.visible = True
+            page.update()
 
     
     header = ft.Container(
