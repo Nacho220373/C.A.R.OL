@@ -115,6 +115,7 @@ def main(page: ft.Page):
     calculator = DeadlineCalculator()
     notifier = NotificationManager(page)
     data_service = RequestDataService(reader, calculator)
+    category_options = data_service.get_categories()
     
     # --- STATE REFERENCES ---
     ui_refs = {} 
@@ -151,6 +152,19 @@ def main(page: ft.Page):
         label="Priority", width=150, text_size=13, content_padding=10,
         options=[ft.dropdown.Option("1"), ft.dropdown.Option("2"), ft.dropdown.Option("3"), ft.dropdown.Option("4")]
     )
+    category_dropdown = ft.Dropdown(
+        label="Category", width=220, text_size=13, content_padding=10,
+        options=[ft.dropdown.Option(cat) for cat in category_options]
+    )
+
+    def ensure_category_option(value):
+        if not value:
+            return
+        for opt in category_dropdown.options:
+            opt_value = getattr(opt, "key", None) or getattr(opt, "text", None)
+            if opt_value == value:
+                return
+        category_dropdown.options.append(ft.dropdown.Option(value))
 
     def close_detail_dialog(e):
         page.close(detail_dialog)
@@ -159,7 +173,13 @@ def main(page: ft.Page):
         title=ft.Column([
             detail_title, detail_subtitle, ft.Divider(),
             ft.Text("Edit Properties:", size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.GREY),
-            ft.Row([status_dropdown, priority_dropdown], alignment=ft.MainAxisAlignment.START)
+            ft.Row(
+                [status_dropdown, priority_dropdown, category_dropdown],
+                alignment=ft.MainAxisAlignment.START,
+                spacing=10,
+                run_spacing=10,
+                wrap=True
+            )
         ], spacing=5),
         content=ft.Container(content=detail_files_list, width=600, bgcolor=ft.Colors.WHITE, border_radius=8),
         actions=[ft.TextButton("Close", on_click=close_detail_dialog, style=ft.ButtonStyle(color=SSA_GREEN))],
@@ -167,19 +187,26 @@ def main(page: ft.Page):
     )
 
     # --- LOGIC ---
+    _UNSET = object()
 
-    def update_local_ui_card(req_id, new_status=None, new_priority=None):
+    def update_local_ui_card(req_id, new_status=_UNSET, new_priority=_UNSET, new_category=_UNSET):
         if req_id in ui_refs:
             for refs in ui_refs[req_id]:
                 try:
-                    if new_status:
-                        refs['status_text'].value = new_status
-                        refs['status_container'].bgcolor = get_status_color(new_status)
+                    if new_status is not _UNSET:
+                        status_value = new_status or "Unknown"
+                        refs['status_text'].value = status_value
+                        refs['status_container'].bgcolor = get_status_color(status_value)
                         refs['status_container'].update()
-                    if new_priority:
-                        refs['priority_text'].value = str(new_priority)
-                        refs['priority_text'].color = get_priority_color(str(new_priority))
+                    if new_priority is not _UNSET:
+                        priority_value = str(new_priority) if new_priority else ""
+                        refs['priority_text'].value = priority_value
+                        refs['priority_text'].color = get_priority_color(priority_value)
                         refs['priority_text'].update()
+                    if refs.get('category_text') and new_category is not _UNSET:
+                        category_value = str(new_category) if new_category else "General"
+                        refs['category_text'].value = category_value.upper()
+                        refs['category_text'].update()
                 except Exception:
                     pass
 
@@ -206,40 +233,53 @@ def main(page: ft.Page):
         """
         # 1. Guardar valores anteriores por si falla
         old_status = req_data.get('status')
-        old_priority = str(req_data.get('priority'))
+        raw_old_priority = req_data.get('priority')
+        old_priority = str(raw_old_priority) if raw_old_priority is not None else None
+        old_category = req_data.get('category')
         
         # 2. Obtener nuevos valores
         new_status = status_dropdown.value
         new_priority = priority_dropdown.value
+        new_category = category_dropdown.value
+
+        if (
+            new_status == old_status
+            and new_priority == old_priority
+            and new_category == old_category
+        ):
+            return
         
         # 3. Actualización Optimista (UI Inmediata)
         req_data['status'] = new_status
         req_data['priority'] = new_priority
-        update_local_ui_card(req_data['id'], new_status, new_priority)
+        req_data['category'] = new_category
+        update_local_ui_card(req_data['id'], new_status, new_priority, new_category)
         
         notifier.send("Saving...", "Syncing with SharePoint...", "info")
 
         # 4. Sincronización en segundo plano con Rollback
         def sync_task():
-            # Llamamos al reader para que escriba en SharePoint
-            success = reader.update_request_metadata(req_data['id'], new_status, new_priority)
+            success = data_service.update_request_properties(
+                req_data['id'],
+                status=new_status,
+                priority=new_priority,
+                category=new_category,
+            )
             
             if success:
-                # Éxito confirmado
                 notifier.send("Saved", "Changes updated in SharePoint", "success")
             else:
-                # Fallo: Revertir cambios (Rollback)
                 print(f"❌ Error actualizando {req_data['id']}. Revirtiendo...")
                 req_data['status'] = old_status
                 req_data['priority'] = old_priority
+                req_data['category'] = old_category
                 
-                # Restaurar UI
-                update_local_ui_card(req_data['id'], old_status, old_priority)
+                update_local_ui_card(req_data['id'], old_status, old_priority, old_category)
                 
-                # Restaurar controles del diálogo si sigue abierto
                 if detail_dialog.open:
                     status_dropdown.value = old_status
                     priority_dropdown.value = old_priority
+                    category_dropdown.value = old_category
                     page.update()
                 
                 notifier.send("Error", "Failed to update SharePoint. Changes reverted.", "error")
@@ -295,11 +335,16 @@ def main(page: ft.Page):
         detail_title.value = req_data.get('request_name', 'Details')
         detail_subtitle.value = f"Location: {req_data.get('location_code')}"
         status_dropdown.value = req_data.get('status')
-        priority_dropdown.value = str(req_data.get('priority'))
+        priority_value = req_data.get('priority')
+        priority_dropdown.value = str(priority_value) if priority_value is not None else None
+        current_category = req_data.get('category')
+        ensure_category_option(current_category)
+        category_dropdown.value = current_category
         
         # Asignar handlers
         status_dropdown.on_change = lambda e: handle_property_change(e, req_data)
         priority_dropdown.on_change = lambda e: handle_property_change(e, req_data)
+        category_dropdown.on_change = lambda e: handle_property_change(e, req_data)
 
         detail_files_list.controls = [ft.ProgressRing(color=SSA_GREEN)]
         page.open(detail_dialog)
@@ -367,8 +412,9 @@ def main(page: ft.Page):
     def create_request_card(req, show_category_label=False):
         reply_stat = req.get('reply_status', {})
         resolve_stat = req.get('resolve_status', {})
-        status_val = req.get('status', 'Unknown')
-        priority_val = str(req.get('priority', ''))
+        status_val = req.get('status') or 'Unknown'
+        raw_priority = req.get('priority')
+        priority_val = str(raw_priority) if raw_priority is not None else ""
         
         unread_count = req.get('unread_emails', 0)
         
@@ -395,13 +441,14 @@ def main(page: ft.Page):
         if req['id'] not in ui_refs:
             ui_refs[req['id']] = []
         
-        ui_refs[req['id']].append({
+        refs_entry = {
             'status_container': status_container_ctrl, 
             'status_text': status_text_ctrl, 
             'priority_text': priority_text_ctrl,
             'badge_container': badge_container_ctrl,
             'badge_text': badge_text_ctrl
-        })
+        }
+        ui_refs[req['id']].append(refs_entry)
 
         card_border_color = SSA_BORDER
         if reply_stat.get('color') == 'red' or resolve_stat.get('color') == 'red':
@@ -409,10 +456,13 @@ def main(page: ft.Page):
         
         category_label = ft.Container()
         if show_category_label:
+            category_value = req.get('category', 'General') or 'General'
+            category_text_ctrl = ft.Text(category_value.upper(), size=9, weight=ft.FontWeight.BOLD, color=SSA_GREEN)
             category_label = ft.Container(
-                content=ft.Text(req.get('category', 'General').upper(), size=9, weight=ft.FontWeight.BOLD, color=SSA_GREEN),
+                content=category_text_ctrl,
                 padding=ft.padding.only(bottom=5)
             )
+            refs_entry['category_text'] = category_text_ctrl
 
         card_content = ft.Container(
             padding=20,
@@ -518,7 +568,7 @@ def main(page: ft.Page):
                             )
                         
                         update_local_badge(req_id, new_unread)
-                        update_local_ui_card(req_id, req.get('status'), req.get('priority'))
+                        update_local_ui_card(req_id, req.get('status'), req.get('priority'), req.get('category'))
                     
                     else:
                         # --- CASO 2: NUEVA SOLICITUD ---

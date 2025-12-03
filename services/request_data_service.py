@@ -37,6 +37,10 @@ class RequestDataService:
             else ["Request", "Staff Movement", "Inquiry", "Information", "Others"]
         )
 
+    def get_categories(self) -> list[str]:
+        """Exposes configured categories without allowing callers to mutate state."""
+        return list(self.categories)
+
     def load(
         self,
         *,
@@ -69,6 +73,27 @@ class RequestDataService:
             state_cache=state_cache,
             meta_cache=meta_cache,
             processed_requests=processed_requests,
+        )
+
+    def update_request_properties(
+        self,
+        request_id: str,
+        *,
+        status: str | None = None,
+        priority: str | None = None,
+        category: str | None = None,
+    ) -> bool:
+        """
+        Persists property changes while keeping the UI layer decoupled from SharePoint.
+        """
+        if not request_id:
+            return False
+
+        return self.reader.update_request_metadata(
+            request_id,
+            new_status=status,
+            new_priority=priority,
+            new_category=category,
         )
 
     def _resolve_category(self, raw_value: str | None) -> str:
