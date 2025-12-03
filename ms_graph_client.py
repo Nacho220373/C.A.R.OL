@@ -1,4 +1,6 @@
 import os
+import threading
+
 import requests
 from dotenv import load_dotenv
 from azure.identity import InteractiveBrowserCredential
@@ -25,25 +27,27 @@ class MSGraphClient:
         ]
         self.credential = None
         self.access_token = None
+        self._token_lock = threading.Lock()
 
     def _get_token(self):
         """Obtiene token abriendo el navegador del sistema."""
         try:
-            if not self.credential:
-                print("🔄 Preparando inicio de sesión interactivo...")
-                # Esto abrirá tu navegador predeterminado
-                self.credential = InteractiveBrowserCredential(
-                    client_id=self.client_id,
-                    tenant_id=self.tenant_id
-                )
+            with self._token_lock:
+                if not self.credential:
+                    print("🔄 Preparando inicio de sesión interactivo...")
+                    # Esto abrirá tu navegador predeterminado
+                    self.credential = InteractiveBrowserCredential(
+                        client_id=self.client_id,
+                        tenant_id=self.tenant_id
+                    )
 
-            # Solicitamos el token. El scope debe ir completo con el prefijo de Graph
-            print("⏳ Solicitando token a Microsoft (mira tu navegador)...")
-            token_data = self.credential.get_token("https://graph.microsoft.com/.default")
-            
-            self.access_token = token_data.token
-            print("✅ ¡Token obtenido correctamente!")
-            return self.access_token
+                # Solicitamos el token. El scope debe ir completo con el prefijo de Graph
+                print("⏳ Solicitando token a Microsoft (mira tu navegador)...")
+                token_data = self.credential.get_token("https://graph.microsoft.com/.default")
+                
+                self.access_token = token_data.token
+                print("✅ ¡Token obtenido correctamente!")
+                return self.access_token
 
         except Exception as e:
             raise Exception(f"Error obteniendo token: {str(e)}")
