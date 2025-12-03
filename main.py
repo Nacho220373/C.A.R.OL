@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from sharepoint_requests_reader import SharePointRequestsReader
 from deadline_calculator import DeadlineCalculator
 from notification_manager import NotificationManager
+from services.request_data_service import RequestDataService
 
 # --- SSA MARINE STYLE GUIDE ---
 SSA_GREEN = "#84BD00"
@@ -113,11 +114,14 @@ def main(page: ft.Page):
     reader = SharePointRequestsReader()
     calculator = DeadlineCalculator()
     notifier = NotificationManager(page)
+    data_service = RequestDataService(reader, calculator)
     
     # --- STATE REFERENCES ---
     ui_refs = {} 
     grids = {}
     requests_state_cache = {}
+    requests_meta_cache = {}
+    requests_refresh_tracker = {}
 
     # --- UI COMPONENTS ---
 
@@ -472,22 +476,40 @@ def main(page: ft.Page):
         """
         Monitorea cambios en SharePoint y notifica al usuario.
         """
+        REFRESH_INTERVAL = 300  # seconds
         while True:
             time.sleep(60) 
             try:
-                # 1. Obtener estado actual
-                new_requests = reader.fetch_active_requests(limit_dates=1)
+                # 1. Obtener estado actual (metadatos ligeros, sin adjuntos)
+                new_requests = reader.fetch_active_requests(limit_dates=1, include_unread=False)
                 new_processed = calculator.process_requests(new_requests)
                 
                 for req in new_processed:
                     req_id = req['id']
                     req_name = req.get('request_name', 'Unknown')
-                    new_unread = req.get('unread_emails', 0)
+                    last_modified = req.get('modified_at')
+                    old_unread = requests_state_cache.get(req_id, 0)
+                    need_refresh = req_id not in requests_state_cache
+                    if not need_refresh:
+                        cached_modified = requests_meta_cache.get(req_id)
+                        need_refresh = last_modified and cached_modified != last_modified
+                        if not need_refresh:
+                            last_refresh = requests_refresh_tracker.get(req_id, 0)
+                            need_refresh = (time.time() - last_refresh) > REFRESH_INTERVAL
+
+                    if need_refresh:
+                        new_unread = reader.get_unread_email_count(req_id, force_refresh=True)
+                        requests_refresh_tracker[req_id] = time.time()
+                    else:
+                        new_unread = old_unread
+
+                    requests_state_cache[req_id] = new_unread
+                    requests_meta_cache[req_id] = last_modified
+
+                    req['unread_emails'] = new_unread
                     
                     if req_id in ui_refs:
                         # --- CASO 1: ACTUALIZACIÓN ---
-                        old_unread = requests_state_cache.get(req_id, 0)
-                        
                         if new_unread > old_unread:
                             notifier.send(
                                 title="New Reply Received",
@@ -495,7 +517,6 @@ def main(page: ft.Page):
                                 type="info"
                             )
                         
-                        requests_state_cache[req_id] = new_unread
                         update_local_badge(req_id, new_unread)
                         update_local_ui_card(req_id, req.get('status'), req.get('priority'))
                     
@@ -508,7 +529,7 @@ def main(page: ft.Page):
                                 type="success"
                             )
 
-                        requests_state_cache[req_id] = new_unread 
+                        requests_refresh_tracker[req_id] = time.time()
                         
                         cat = req.get('category', 'Others')
                         target_category = "Others"
@@ -536,20 +557,72 @@ def main(page: ft.Page):
     poll_thread = threading.Thread(target=background_poller, daemon=True)
     poll_thread.start()
 
-    def load_data():
+    def render_dataset(dataset):
+        """Rebuilds tabs and local caches from a RequestDataset."""
+        ui_refs.clear()
+        grids.clear()
+        tabs.tabs.clear()
+
+        requests_state_cache.clear()
+        requests_state_cache.update(dataset.state_cache)
+
+        requests_meta_cache.clear()
+        requests_meta_cache.update(dataset.meta_cache)
+
+        requests_refresh_tracker.clear()
+        now_ts = time.time()
+        for req_id in dataset.state_cache.keys():
+            requests_refresh_tracker[req_id] = now_ts
+
+        grid_config = {
+            "expand": 1,
+            "runs_count": 4,
+            "max_extent": 320,
+            "child_aspect_ratio": 0.95,
+            "spacing": 20,
+            "run_spacing": 20,
+        }
+
+        grid_todo = ft.GridView(**grid_config)
+        for item in dataset.todo_requests:
+            grid_todo.controls.append(create_request_card(item, show_category_label=True))
+        grids["To Do"] = grid_todo
+
+        tabs.tabs.append(
+            ft.Tab(
+                text=f"To Do ({len(dataset.todo_requests)})",
+                icon=ft.Icons.CHECKLIST_RTL,
+                content=ft.Container(content=grid_todo, padding=20),
+            )
+        )
+
+        for cat_name, items in dataset.grouped_requests.items():
+            if not items:
+                continue
+            grid = ft.GridView(**grid_config)
+            for item in items:
+                grid.controls.append(create_request_card(item))
+            grids[cat_name] = grid
+
+            tabs.tabs.append(
+                ft.Tab(
+                    text=f"{cat_name} ({len(items)})",
+                    content=ft.Container(content=grid, padding=20),
+                )
+            )
+
+        page.update()
+
+    def load_data(limit_dates: int = 1):
         loading_container.visible = True
         status_text.value = "Initializing..."
-        
         tabs.visible = False
-        ui_refs.clear() 
-        grids.clear() 
-        requests_state_cache.clear()
         page.update()
 
         stop_loading_event = threading.Event()
 
         def cycle_messages():
-            time.sleep(0.5) 
+            time.sleep(0.5)
             status_text.value = "Scanning emails for this payroll period..."
             page.update()
             time.sleep(10)
@@ -559,94 +632,47 @@ def main(page: ft.Page):
                 "Let Carol work...",
                 "Just a moment, organizing the chaos...",
                 "Reviewing the Matrix...",
-                "Leave me alone...",  
+                "Leave me alone...",
                 "Almost there...",
                 "Asking the server nicely...",
                 "Deciphering payroll hieroglyphs...",
                 "Beep boop... calculating deadlines...",
                 "This is taking longer than my coffee break...",
             ]
-            
+
             idx = 0
             while not stop_loading_event.is_set():
-                status_text.value = messages[idx % len(messages)] 
+                status_text.value = messages[idx % len(messages)]
                 page.update()
                 idx += 1
                 time.sleep(10)
 
-        try:
-            status_text.value = "Connecting to Microsoft... \nPlease check your browser window."
-            page.update()
-            
-            _ = reader._get_drive_id() 
-            
-            progress_thread = threading.Thread(target=cycle_messages, daemon=True)
-            progress_thread.start()
-            
-            raw_requests = reader.fetch_active_requests(limit_dates=1)
-            processed_requests = calculator.process_requests(raw_requests)
-            
-            stop_loading_event.set()
-            status_text.value = "Rendering..."
-            page.update()
-            
-            todo_list = []
-            grouped_requests = {
-                "Request": [], "Staff Movement": [], "Inquiry": [], "Information": [], "Others": []
-            }
-            
-            for r in processed_requests:
-                requests_state_cache[r['id']] = r.get('unread_emails', 0)
+        def worker():
+            try:
+                status_text.value = "Connecting to Microsoft... \nPlease check your browser window."
+                page.update()
 
-                status_val = str(r.get('status', '')).lower()
-                if "pending" in status_val or "progress" in status_val:
-                    todo_list.append(r)
+                _ = reader._get_drive_id()
 
-                cat = r.get('category', 'Others')
-                found = False
-                for key in ["Request", "Staff Movement", "Inquiry", "Information"]:
-                    if key.lower() in str(cat).lower():
-                        grouped_requests[key].append(r)
-                        found = True
-                        break
-                if not found: grouped_requests["Others"].append(r)
-            
-            tabs.tabs.clear()
-            
-            grid_config = {"expand": 1, "runs_count": 4, "max_extent": 320, "child_aspect_ratio": 0.95, "spacing": 20, "run_spacing": 20}
+                threading.Thread(target=cycle_messages, daemon=True).start()
 
-            grid_todo = ft.GridView(**grid_config)
-            if todo_list:
-                for item in todo_list:
-                    grid_todo.controls.append(create_request_card(item, show_category_label=True))
-            grids["To Do"] = grid_todo 
-            
-            tabs.tabs.append(ft.Tab(
-                text=f"To Do ({len(todo_list)})", 
-                icon=ft.Icons.CHECKLIST_RTL, 
-                content=ft.Container(content=grid_todo, padding=20)
-            ))
-            
-            for cat_name, items in grouped_requests.items():
-                if items:
-                    grid = ft.GridView(**grid_config)
-                    for item in items:
-                        grid.controls.append(create_request_card(item))
-                    grids[cat_name] = grid 
-                    
-                    tabs.tabs.append(ft.Tab(
-                        text=f"{cat_name} ({len(items)})", 
-                        content=ft.Container(content=grid, padding=20)
-                    ))
+                dataset = data_service.load(limit_dates=limit_dates, include_unread=True)
 
-        except Exception as e:
-            notifier.send("Error", f"Could not load data: {e}", "error")
-            print(e)
-        finally:
-            stop_loading_event.set()
-            loading_container.visible = False
-            tabs.visible = True
-            page.update()
+                stop_loading_event.set()
+                status_text.value = "Rendering..."
+                page.update()
+
+                render_dataset(dataset)
+            except Exception as e:
+                stop_loading_event.set()
+                notifier.send("Error", f"Could not load data: {e}", "error")
+                print(e)
+            finally:
+                loading_container.visible = False
+                tabs.visible = True
+                page.update()
+
+        threading.Thread(target=worker, daemon=True).start()
 
     
     header = ft.Container(
