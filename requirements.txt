@@ -1,1 +1,5 @@
-msal==1.28.0requests==2.31.0python-dotenv==1.0.0flet==0.21.0azure-identity==1.15.0plyer==2.1.0
+requests==2.31.0
+python-dotenv==1.0.0
+flet==0.21.0
+azure-identity==1.15.0
+plyer==2.1.0
