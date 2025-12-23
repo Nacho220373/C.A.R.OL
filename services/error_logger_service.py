@@ -77,7 +77,7 @@ class ErrorLoggerService:
             signature = payload['Title']
             
             # A. Buscar si ya existe este error
-            endpoint = f"/sites/{self.site_id}/lists/{self.LIST_NAME}/items?filter=fields/Title eq '{signature}'"
+            endpoint = f"/sites/{self.site_id}/lists/{self.LIST_NAME}/items?$expand=fields&$filter=fields/Title eq '{signature}'"
             headers = {"Prefer": "HonorNonIndexedQueriesWarningMayFailRandomly"}
             
             existing = self.client.get(endpoint, extra_headers=headers)
