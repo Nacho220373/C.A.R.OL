@@ -1,0 +1,103 @@
+from dataclasses import dataclass
+from typing import Dict, List, Sequence, Tuple
+from datetime import datetime, date
+
+from deadline_calculator import DeadlineCalculator
+from sharepoint_requests_reader import SharePointRequestsReader
+
+
+@dataclass(frozen=True)
+class RequestDataset:
+    """Aggregated data needed by the UI layer."""
+
+    todo_requests: List[dict]
+    grouped_requests: Dict[str, List[dict]]
+    state_cache: Dict[str, int]
+    meta_cache: Dict[str, str]
+    processed_requests: List[dict]
+
+
+class RequestDataService:
+    """
+    Facade responsible for retrieving, transforming, and grouping SharePoint data.
+    Keeps UI code lean and focused on presentation (SoC / SOLID: SRP).
+    """
+
+    def __init__(
+        self,
+        reader: SharePointRequestsReader | None = None,
+        calculator: DeadlineCalculator | None = None,
+        *,
+        categories: Sequence[str] | None = None,
+    ):
+        self.reader = reader or SharePointRequestsReader()
+        self.calculator = calculator or DeadlineCalculator()
+        self.categories = list(
+            categories
+            if categories is not None
+            # CAMBIO: Reemplazado "Others" por "New Email"
+            else ["Request", "Staff Movements", "Inquiry", "Information", "New Email"]
+        )
+
+    def load(
+        self,
+        *,
+        limit_dates: int = 1,
+        date_range: Tuple[date, date] = None,
+        include_unread: bool = True,
+        progress_callback = None 
+    ) -> RequestDataset:
+        """Fetches raw requests, enriches them, and returns grouped datasets."""
+        
+        raw_requests = self.reader.fetch_active_requests(
+            limit_dates=limit_dates,
+            date_range=date_range,
+            include_unread=include_unread,
+            progress_callback=progress_callback
+        )
+        
+        processed_requests = self.calculator.process_requests(raw_requests)
+
+        state_cache = {req["id"]: req.get("unread_emails", 0) for req in processed_requests}
+        meta_cache = {req["id"]: req.get("modified_at") for req in processed_requests}
+
+        grouped_requests: Dict[str, List[dict]] = {cat: [] for cat in self.categories}
+        for req in processed_requests:
+            target_category = self._resolve_category(req.get("category"))
+            # Aseguramos que la categoría exista en el diccionario, si no, lo ponemos en New Email
+            if target_category not in grouped_requests:
+                target_category = "New Email"
+                
+            grouped_requests[target_category].append(req)
+
+        todo_requests = [req for req in processed_requests if self._is_todo_status(req.get("status", ""))]
+
+        grouped_requests = {k: v for k, v in grouped_requests.items() if v}
+
+        return RequestDataset(
+            todo_requests=todo_requests,
+            grouped_requests=grouped_requests,
+            state_cache=state_cache,
+            meta_cache=meta_cache,
+            processed_requests=processed_requests,
+        )
+
+    def _resolve_category(self, raw_value: str | None) -> str:
+        # CAMBIO: Si no hay valor, es "New Email"
+        if not raw_value:
+            return "New Email"
+
+        raw = str(raw_value).lower()
+        for category in self.categories:
+            if category.lower() in raw:
+                return category
+        
+        # CAMBIO: Si no coincide con ninguna, es "New Email"
+        return "New Email"
+
+    @staticmethod
+    def _is_todo_status(status_value: str | None) -> bool:
+        if not status_value:
+            return False
+        normalized = str(status_value).lower()
+        return "pending" in normalized or "progress" in normalized

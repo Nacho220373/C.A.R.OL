@@ -1,0 +1,1 @@
+msal==1.28.0requests==2.31.0python-dotenv==1.0.0flet==0.21.0azure-identity==1.15.0plyer==2.1.0openpyxl==3.1.2pandas==2.2.0
