@@ -1,8 +1,11 @@
 import os
 import threading
+import time
 import requests
 from dotenv import load_dotenv
 from azure.identity import InteractiveBrowserCredential
+from urllib3.util.retry import Retry
+from requests.adapters import HTTPAdapter
 
 load_dotenv()
 
@@ -29,18 +32,51 @@ class MSGraphClient:
         self.scopes = ["User.Read", "Sites.Read.All", "Files.Read.All", "Sites.ReadWrite.All"]
         self.credential = None
         self.access_token = None
+        self._access_token_expires_on: int | None = None
         
         # --- NUEVOS ATRIBUTOS DE ESTADO ---
         self.last_error_code = 0 
         self.is_session_valid = True
         
         self._token_lock = threading.Lock()
+        self._session = self._build_session()
         self._initialized = True
+    
+    @property
+    def session(self) -> requests.Session:
+        """Shared HTTP session (connection pooling + retries)."""
+        return self._session
+
+    def _build_session(self) -> requests.Session:
+        session = requests.Session()
+        retry = Retry(
+            total=5,
+            connect=3,
+            read=3,
+            status=3,
+            backoff_factor=0.5,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset({"GET", "POST", "PATCH", "DELETE"}),
+            raise_on_status=False,
+            respect_retry_after_header=True,
+        )
+        adapter = HTTPAdapter(max_retries=retry, pool_connections=20, pool_maxsize=20)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        return session
+
+    def _token_is_fresh(self, *, skew_seconds: int = 120) -> bool:
+        if not self.access_token:
+            return False
+        if self._access_token_expires_on is None:
+            # If we don't know expiry, assume it's usable unless we saw 401.
+            return self.last_error_code != 401
+        return time.time() < (self._access_token_expires_on - skew_seconds)
 
     def _get_token(self):
         try:
             with self._token_lock:
-                if self.access_token and self.last_error_code != 401: 
+                if self._token_is_fresh(): 
                     return self.access_token
 
                 if not self.credential:
@@ -51,6 +87,8 @@ class MSGraphClient:
                 
                 token_data = self.credential.get_token("https://graph.microsoft.com/.default")
                 self.access_token = token_data.token
+                # azure-identity exposes expires_on (epoch seconds).
+                self._access_token_expires_on = getattr(token_data, "expires_on", None)
                 self.last_error_code = 0
                 self.is_session_valid = True
                 return self.access_token
@@ -59,7 +97,7 @@ class MSGraphClient:
             raise Exception(f"Error obteniendo token: {str(e)}")
 
     def _make_request(self, method, endpoint, json_data=None, return_raw=False, extra_headers=None):
-        if not self.access_token: 
+        if not self._token_is_fresh(): 
             try: self._get_token()
             except: return None
 
@@ -72,10 +110,14 @@ class MSGraphClient:
         url = endpoint if endpoint.startswith("http") else f"https://graph.microsoft.com/v1.0{endpoint}"
         
         try:           
-            if method == 'GET': response = requests.get(url, headers=headers, timeout=30)
-            elif method == 'PATCH': response = requests.patch(url, headers=headers, json=json_data, timeout=30)
-            elif method == 'POST': response = requests.post(url, headers=headers, json=json_data, timeout=30)
-            elif method == 'DELETE': response = requests.delete(url, headers=headers, timeout=30)
+            if method == 'GET':
+                response = self._session.get(url, headers=headers, timeout=30)
+            elif method == 'PATCH':
+                response = self._session.patch(url, headers=headers, json=json_data, timeout=30)
+            elif method == 'POST':
+                response = self._session.post(url, headers=headers, json=json_data, timeout=30)
+            elif method == 'DELETE':
+                response = self._session.delete(url, headers=headers, timeout=30)
             else: return None
             
             self.last_error_code = response.status_code
@@ -86,6 +128,9 @@ class MSGraphClient:
             elif response.status_code == 401:
                 print("⚠️ Token expirado detectado en request.")
                 self.is_session_valid = False
+                # Force refresh next time.
+                self.access_token = None
+                self._access_token_expires_on = None
                 return None
             else:
                 print(f"❌ ERROR GRAPH API {response.status_code}: {response.text}") # <--- Necesitamos ver esto
@@ -101,6 +146,7 @@ class MSGraphClient:
     def patch(self, endpoint, json_data, extra_headers=None): return self._make_request('PATCH', endpoint, json_data, extra_headers=extra_headers)
     def post(self, endpoint, json_data, extra_headers=None): return self._make_request('POST', endpoint, json_data, extra_headers=extra_headers)
     def delete(self, endpoint, extra_headers=None): return self._make_request('DELETE', endpoint, extra_headers=extra_headers)
+    def get_raw(self, endpoint, extra_headers=None): return self._make_request('GET', endpoint, return_raw=True, extra_headers=extra_headers)
     
     def get_content(self, endpoint):
         response = self._make_request('GET', endpoint, return_raw=True)

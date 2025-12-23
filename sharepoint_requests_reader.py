@@ -5,7 +5,6 @@ import time
 from datetime import datetime, date
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import requests
 from dotenv import load_dotenv
 
 from ms_graph_client import MSGraphClient
@@ -54,10 +53,10 @@ class SharePointRequestsReader:
         if not drive_id: return []
 
         if item_id:
-            endpoint = f"/sites/{self.site_id}/drives/{drive_id}/items/{item_id}/children?expand=listItem(expand=fields)"
+            endpoint = f"/sites/{self.site_id}/drives/{drive_id}/items/{item_id}/children?$expand=listItem($expand=fields)"
         elif path:
             safe_path = path.strip("/")
-            endpoint = f"/sites/{self.site_id}/drives/{drive_id}/root:/{safe_path}:/children?expand=listItem(expand=fields)"
+            endpoint = f"/sites/{self.site_id}/drives/{drive_id}/root:/{safe_path}:/children?$expand=listItem($expand=fields)"
         else:
             return []
 
@@ -142,16 +141,17 @@ class SharePointRequestsReader:
         current_url = delta_url
         
         while True:
-            # Usamos get directo ya que delta_url ya es una URL completa
-            response = requests.get(current_url, headers={'Authorization': f'Bearer {self.client.access_token}'})
-            
-            if response.status_code != 200:
-                print(f"⚠️ Error en Delta Query: {response.status_code}")
+            # delta_url ya es una URL completa; usamos el cliente para pooling/reintentos/refresh.
+            response = self.client.get_raw(current_url)
+
+            if not response or response.status_code != 200:
+                status = response.status_code if response else self.client.last_error_code
+                print(f"⚠️ Error en Delta Query: {status}")
                 # Si el token expiró (410 Gone), hay que reiniciar (retornar None fuerza resync)
-                if response.status_code == 410:
+                if status == 410:
                     return None, []
                 return current_url, [] # Retornar URL vieja para reintentar
-                
+
             data = response.json()
             items = data.get('value', [])
             changes.extend(items)
@@ -319,7 +319,8 @@ class SharePointRequestsReader:
         try:
             temp_dir = tempfile.gettempdir()
             file_path = os.path.join(temp_dir, filename)
-            response = requests.get(download_url)
+            # downloadUrl ya viene pre-autorizado; reutilizamos session para performance.
+            response = self.client.session.get(download_url, timeout=60)
             if response.status_code == 200:
                 with open(file_path, 'wb') as f:
                     f.write(response.content)
