@@ -11,9 +11,10 @@ from services.session_monitor import SessionMonitor
 # --- NUEVO: Manejo global de errores ---
 from error_tracking import setup_global_exception_handler, track_errors
 
+from runtime_paths import resource_path
+
 # --- PREPARACIÓN DE RUTAS ---
-basedir = os.path.dirname(os.path.abspath(__file__))
-assets_path = os.path.join(basedir, "assets")
+assets_path = resource_path("assets")
 
 def main(page: ft.Page):
     # --- NIVEL 3: Instalar Catch-All Global ---
