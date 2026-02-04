@@ -1,5 +1,6 @@
 from dataclasses import dataclass
-from typing import Dict, List, Sequence
+from typing import Dict, List, Sequence, Tuple
+from datetime import datetime, date
 
 from deadline_calculator import DeadlineCalculator
 from sharepoint_requests_reader import SharePointRequestsReader
@@ -34,20 +35,27 @@ class RequestDataService:
         self.categories = list(
             categories
             if categories is not None
-            else ["Request", "Staff Movement", "Inquiry", "Information", "Others"]
+            # CAMBIO: Reemplazado "Others" por "New Email"
+            else ["Request", "Staff Movements", "Inquiry", "Information", "New Email"]
         )
 
     def load(
         self,
         *,
         limit_dates: int = 1,
+        date_range: Tuple[date, date] = None,
         include_unread: bool = True,
+        progress_callback = None 
     ) -> RequestDataset:
         """Fetches raw requests, enriches them, and returns grouped datasets."""
+        
         raw_requests = self.reader.fetch_active_requests(
             limit_dates=limit_dates,
+            date_range=date_range,
             include_unread=include_unread,
+            progress_callback=progress_callback
         )
+        
         processed_requests = self.calculator.process_requests(raw_requests)
 
         state_cache = {req["id"]: req.get("unread_emails", 0) for req in processed_requests}
@@ -56,11 +64,14 @@ class RequestDataService:
         grouped_requests: Dict[str, List[dict]] = {cat: [] for cat in self.categories}
         for req in processed_requests:
             target_category = self._resolve_category(req.get("category"))
+            # Aseguramos que la categoría exista en el diccionario, si no, lo ponemos en New Email
+            if target_category not in grouped_requests:
+                target_category = "New Email"
+                
             grouped_requests[target_category].append(req)
 
         todo_requests = [req for req in processed_requests if self._is_todo_status(req.get("status", ""))]
 
-        # Remove empty entries to avoid empty tabs downstream.
         grouped_requests = {k: v for k, v in grouped_requests.items() if v}
 
         return RequestDataset(
@@ -72,14 +83,17 @@ class RequestDataService:
         )
 
     def _resolve_category(self, raw_value: str | None) -> str:
+        # CAMBIO: Si no hay valor, es "New Email"
         if not raw_value:
-            return "Others"
+            return "New Email"
 
         raw = str(raw_value).lower()
         for category in self.categories:
             if category.lower() in raw:
                 return category
-        return "Others"
+        
+        # CAMBIO: Si no coincide con ninguna, es "New Email"
+        return "New Email"
 
     @staticmethod
     def _is_todo_status(status_value: str | None) -> bool:
@@ -87,4 +101,3 @@ class RequestDataService:
             return False
         normalized = str(status_value).lower()
         return "pending" in normalized or "progress" in normalized
-
