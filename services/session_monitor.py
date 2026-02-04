@@ -15,8 +15,13 @@ class SessionMonitor:
         self._consecutive_failures = 0
         self._max_failures = 1 # Disparo inmediato al detectar sesión muerta
 
+<<<<<<< HEAD
     def start(self, interval=5): # <--- CAMBIO: Intervalo reducido a 5s para detección rápida
         """Monitorea la sesión con mayor frecuencia (cada 5 segundos)."""
+=======
+    def start(self, interval=60):
+        """Monitorea la sesión con mayor frecuencia (cada minuto)."""
+>>>>>>> 050048a87e330291b783c1b91c5b654cf7c42826
         if self.is_running: return
         self.is_running = True
         threading.Thread(target=self._watch_loop, args=(interval,), daemon=True).start()

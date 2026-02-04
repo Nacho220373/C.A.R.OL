@@ -9,6 +9,7 @@ class CalendarView(ft.Container):
         :param on_range_selected: Callback(start_date, end_date)
         :param on_dismiss: Callback opcional para cerrar el calendario sin cambios.
         """
+<<<<<<< HEAD
         super().__init__()
         
         # Opciones visuales del contenedor
@@ -19,6 +20,17 @@ class CalendarView(ft.Container):
         self.border_radius = 10
         self.border = ft.border.all(1, "#e0e0e0")
         self.shadow = ft.BoxShadow(blur_radius=10, color=ft.Colors.with_opacity(0.1, "black"))
+=======
+        super().__init__(
+            width=320,
+            height=350,
+            padding=10,
+            bgcolor="white",
+            border_radius=10,
+            border=ft.border.all(1, "#e0e0e0"),
+            shadow=ft.BoxShadow(blur_radius=10, color=ft.Colors.with_opacity(0.1, "black"))
+        )
+>>>>>>> 050048a87e330291b783c1b91c5b654cf7c42826
         
         self.on_range_selected = on_range_selected
         self.on_dismiss = on_dismiss

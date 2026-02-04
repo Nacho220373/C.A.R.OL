@@ -13,14 +13,19 @@ class CategoryRulesService:
     Servicio (SRP) que:
     1. Lee reglas de SLA (tiempos y prioridad) desde 'Category Prioritation Matrix'.
     2. Lee horarios de usuarios desde la hoja 'User'.
+<<<<<<< HEAD
     3. [NUEVO] Lee visibilidad de Pay Groups y rutas desde 'Pay Groups Pathways'.
     4. Calcula fechas límite respetando esos horarios específicos.
+=======
+    3. Calcula fechas límite respetando esos horarios específicos.
+>>>>>>> 050048a87e330291b783c1b91c5b654cf7c42826
     """
     def __init__(self):
         self.client = MSGraphClient()
         self.site_id = os.getenv('SHAREPOINT_SITE_ID')
         self.file_path = os.getenv('LOCATIONS_FILE_PATH', 'General/locations.xlsx')
         
+<<<<<<< HEAD
         # Caches en memoria existentes
         self.rules_db = {}      
         self.schedules_db = {}  
@@ -29,6 +34,12 @@ class CategoryRulesService:
         self.user_visibility_db = {} # email -> set(pay_groups)
         self.pathways_db = {}        # pay_group -> root_path
         
+=======
+        # Caches en memoria
+        self.rules_db = {}      
+        self.schedules_db = {}  
+        
+>>>>>>> 050048a87e330291b783c1b91c5b654cf7c42826
         self.drive_id = None
 
     def _get_drive_id(self):
@@ -45,8 +56,13 @@ class CategoryRulesService:
         return None
 
     def load_data(self):
+<<<<<<< HEAD
         """Descarga el Excel y procesa hojas: Reglas, Usuarios y [NUEVO] Rutas."""
         print("🧠 Cargando Reglas, Horarios y Rutas desde Excel...")
+=======
+        """Descarga el Excel y procesa ambas hojas: Reglas y Usuarios."""
+        print("🧠 Cargando Reglas y Horarios desde Excel...")
+>>>>>>> 050048a87e330291b783c1b91c5b654cf7c42826
         try:
             drive_id = self._get_drive_id()
             if not drive_id: return
@@ -61,7 +77,11 @@ class CategoryRulesService:
 
             excel_file = io.BytesIO(content_bytes)
             
+<<<<<<< HEAD
             # --- 1. CARGAR REGLAS (Matrix) - Lógica Existente ---
+=======
+            # --- 1. CARGAR REGLAS (Matrix) ---
+>>>>>>> 050048a87e330291b783c1b91c5b654cf7c42826
             df_rules = pd.read_excel(excel_file, sheet_name="Category Prioritation Matrix")
             df_rules.columns = df_rules.columns.str.strip()
             
@@ -76,18 +96,26 @@ class CategoryRulesService:
                     'resolve_limit_min': int(row.get('resolve_limit_min', 0) or 0)
                 }
 
+<<<<<<< HEAD
             # --- 2. CARGAR HORARIOS Y VISIBILIDAD (User) ---
             # Extendemos la lectura de la hoja User sin romper la lógica anterior
+=======
+            # --- 2. CARGAR HORARIOS (User) ---
+>>>>>>> 050048a87e330291b783c1b91c5b654cf7c42826
             df_users = pd.read_excel(excel_file, sheet_name="User")
             df_users.columns = df_users.columns.str.strip()
             
             self.schedules_db = {}
+<<<<<<< HEAD
             self.user_visibility_db = {} # Reiniciar cache
             
+=======
+>>>>>>> 050048a87e330291b783c1b91c5b654cf7c42826
             for _, row in df_users.iterrows():
                 email = str(row.get('User', '')).strip().lower()
                 if not email or email == 'nan': continue
                 
+<<<<<<< HEAD
                 # A. Lógica Original: Horarios
                 in_val = row.get('In')
                 out_val = row.get('Out')
@@ -128,6 +156,15 @@ class CategoryRulesService:
                 print("⚠️ Hoja 'Pay Groups Pathways' no encontrada. Se usará modo compatibilidad (Single Root).")
             except Exception as ex:
                 print(f"⚠️ Error leyendo Pathways: {ex}")
+=======
+                in_val = row.get('In')
+                out_val = row.get('Out')
+                
+                parsed_in = self._parse_time(in_val, time(9, 0))  # Default 9 AM
+                parsed_out = self._parse_time(out_val, time(18, 0)) # Default 6 PM
+                
+                self.schedules_db[email] = {'in': parsed_in, 'out': parsed_out}
+>>>>>>> 050048a87e330291b783c1b91c5b654cf7c42826
 
             print(f"✅ Datos cargados: {len(self.rules_db)} Reglas, {len(self.schedules_db)} Usuarios.")
             
@@ -166,6 +203,7 @@ class CategoryRulesService:
         email_key = str(email).strip().lower()
         return self.schedules_db.get(email_key, {'in': time(9,0), 'out': time(18,0)})
 
+<<<<<<< HEAD
     def get_paths_for_user(self, user_email):
         """
         [NUEVO] Método para Fase 2.
@@ -190,6 +228,8 @@ class CategoryRulesService:
         # Convertimos a lista para uso general
         return list(unique_paths)
 
+=======
+>>>>>>> 050048a87e330291b783c1b91c5b654cf7c42826
     def calculate_deadlines(self, creation_date_iso, category, user_email):
         """
         Calcula Reply y Resolve deadlines basados en la fecha de creación (UTC)

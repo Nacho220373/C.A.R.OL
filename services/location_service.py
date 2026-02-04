@@ -52,6 +52,11 @@ class LocationService:
 
         try:
             # Leemos el Excel desde los bytes en memoria
+<<<<<<< HEAD
+=======
+            # CAMBIO CRÍTICO: Especificamos sheet_name="Locations" para robustez.
+            # Esto permite agregar otras hojas al Excel sin romper la lógica.
+>>>>>>> 050048a87e330291b783c1b91c5b654cf7c42826
             df = pd.read_excel(io.BytesIO(content_bytes), sheet_name="Locations")
             
             self.valid_locations = set()
@@ -92,6 +97,7 @@ class LocationService:
         except Exception as e:
             print(f"❌ Error procesando el Excel de ubicaciones: {e}")
 
+<<<<<<< HEAD
     def get_locations_for_generation(self):
         """
         Lee el Excel completo para generar las timecards.
@@ -149,6 +155,8 @@ class LocationService:
             print(f"❌ Error leyendo ubicaciones para generación: {e}")
             return []
 
+=======
+>>>>>>> 050048a87e330291b783c1b91c5b654cf7c42826
     def is_valid(self, location_code):
         if not location_code: return False
         # Si la lista está vacía (error de carga), asumimos todo válido para no bloquear trabajo

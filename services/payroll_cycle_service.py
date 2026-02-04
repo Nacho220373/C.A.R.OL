@@ -1,15 +1,24 @@
 import os
+<<<<<<< HEAD
 import threading
 from datetime import datetime, timedelta, timezone
 from ms_graph_client import MSGraphClient
 # NUEVOS IMPORTS para la generación automática
 from services.location_service import LocationService
 from services.timecard_service import TimecardService
+=======
+from datetime import datetime, timedelta, timezone
+from ms_graph_client import MSGraphClient
+>>>>>>> 050048a87e330291b783c1b91c5b654cf7c42826
 
 class PayrollCycleService:
     """
     Servicio dedicado a la gestión del ciclo de vida de la nómina.
+<<<<<<< HEAD
     Responsabilidad (SRP): Calcular fechas, cerrar ciclo y generar nuevos ítems de seguimiento.
+=======
+    Responsabilidad (SRP): Calcular fechas y actualizar la lista de configuración en SharePoint.
+>>>>>>> 050048a87e330291b783c1b91c5b654cf7c42826
     """
     def __init__(self):
         self.client = MSGraphClient()
@@ -45,9 +54,16 @@ class PayrollCycleService:
 
     def execute_cycle_closure(self, current_date_str: str, next_date_str: str, closing_user_name: str):
         """
+<<<<<<< HEAD
         Orquesta el cierre del ciclo actual y la apertura del siguiente.
         La generación de Timecards se dispara de forma ASÍNCRONA (Fire & Forget)
         para no bloquear la interfaz de usuario.
+=======
+        Orquesta el cierre del ciclo actual y la apertura del siguiente MANUALMENTE seleccionado.
+        1. Busca el ítem del ciclo actual.
+        2. Actualiza (Cierra) el ciclo actual.
+        3. Crea el nuevo ciclo con la fecha provista por el usuario.
+>>>>>>> 050048a87e330291b783c1b91c5b654cf7c42826
         """
         print(f"🔄 Iniciando cierre de ciclo: {current_date_str} -> Siguiente: {next_date_str}")
         pay_group = self.get_pay_group_from_env()
@@ -94,6 +110,7 @@ class PayrollCycleService:
         create_result = self.client.post(create_url, create_payload)
         
         if create_result and 'id' in create_result:
+<<<<<<< HEAD
             # --- INTEGRACIÓN ASÍNCRONA: Generación Automática de Timecards ---
             # Definimos la tarea que correrá en segundo plano
             def background_gen_task(date_str):
@@ -122,6 +139,11 @@ class PayrollCycleService:
             return {
                 "success": True, 
                 "message": f"Closed {current_date_str}. Created {next_date_str}. (Generating cards in background...)",
+=======
+            return {
+                "success": True, 
+                "message": f"Closed {current_date_str}. Created {next_date_str}.",
+>>>>>>> 050048a87e330291b783c1b91c5b654cf7c42826
                 "next_cycle": next_date_str
             }
         else:

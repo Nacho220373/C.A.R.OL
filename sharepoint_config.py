@@ -24,11 +24,15 @@ COLUMN_MAP = {
     
     # --- NUEVO CAMPO ---
     # En la API de Graph, "Modified By" se llama internamente "Editor"
+<<<<<<< HEAD
     "editor": "Editor",
 
     # --- CAMPO DE COMENTARIOS ---
     # Asumimos que el nombre interno en SharePoint es "Comments"
     "comments": "Comments"
+=======
+    "editor": "Editor" 
+>>>>>>> 050048a87e330291b783c1b91c5b654cf7c42826
 }
 
 # Valores esperados para prioridades

@@ -1,8 +1,12 @@
 import flet as ft
+<<<<<<< HEAD
 import json
 import os
 from ui.styles import SSA_GREEN, SSA_GREY, SSA_BG
 from services.path_manager import PathManager
+=======
+from ui.styles import SSA_GREEN, SSA_GREY, SSA_BG
+>>>>>>> 050048a87e330291b783c1b91c5b654cf7c42826
 
 class HelpTourDialog(ft.AlertDialog):
     """
@@ -15,6 +19,7 @@ class HelpTourDialog(ft.AlertDialog):
         self.modal = True
         self.current_step = 0
         self.on_dismiss_callback = on_dismiss_callback 
+<<<<<<< HEAD
         self.prefs_path = PathManager.get_user_prefs_path()
         
         # Cargar preferencia inicial si existe
@@ -32,6 +37,14 @@ class HelpTourDialog(ft.AlertDialog):
             value=initial_value, 
             label_style=ft.TextStyle(size=12, color=SSA_GREY),
             on_change=self.save_preference # Guardado inmediato al cambiar
+=======
+        
+        # Checkbox para la preferencia del usuario
+        self.dont_show_checkbox = ft.Checkbox(
+            label="Don't show again", 
+            value=False, 
+            label_style=ft.TextStyle(size=12, color=SSA_GREY)
+>>>>>>> 050048a87e330291b783c1b91c5b654cf7c42826
         )
 
         # --- CONTENIDO DEL TOUR (EN INGLÉS) ---
@@ -85,7 +98,11 @@ class HelpTourDialog(ft.AlertDialog):
                         content=ft.Row([
                             ft.Icon(ft.Icons.LIGHTBULB, color="amber"),
                             ft.Text("The Priority Matrix automatically sets the Priority and deadlines based on the category you choose!", size=12, italic=True, expand=True)
+<<<<<<< HEAD
                         ], alignment=ft.MainAxisAlignment.START, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+=======
+                        ], alignment=ft.MainAxisAlignment.START, vertical_alignment=ft.CrossAxisAlignment.START),
+>>>>>>> 050048a87e330291b783c1b91c5b654cf7c42826
                         bgcolor=SSA_BG, padding=10, border_radius=8, width=400
                     )
                 ], spacing=5)
@@ -148,6 +165,7 @@ class HelpTourDialog(ft.AlertDialog):
         ]
         self.actions_alignment = ft.MainAxisAlignment.CENTER
 
+<<<<<<< HEAD
     def save_preference(self, e):
         """Guarda la preferencia localmente usando PathManager"""
         prefs = {"hide_tour": self.dont_show_checkbox.value}
@@ -159,6 +177,8 @@ class HelpTourDialog(ft.AlertDialog):
         except Exception as ex:
             print(f"Error saving prefs: {ex}")
 
+=======
+>>>>>>> 050048a87e330291b783c1b91c5b654cf7c42826
     def update_view(self):
         step = self.steps[self.current_step]
         self.title.value = step["title"]
@@ -183,6 +203,10 @@ class HelpTourDialog(ft.AlertDialog):
     def close_tour(self, e):
         self.open = False
         self.page_ref.update()
+<<<<<<< HEAD
         # Notificar al manager sobre la decisión del usuario (Mantenemos compatibilidad)
+=======
+        # Notificar al manager sobre la decisión del usuario
+>>>>>>> 050048a87e330291b783c1b91c5b654cf7c42826
         if self.on_dismiss_callback:
             self.on_dismiss_callback(dont_show_again=self.dont_show_checkbox.value)
